@@ -19,4 +19,7 @@ uv tool install -e .
 stcli [OPTIONS] COMMAND [ARGS]...
 ```
 
+`st` is installed as a shorthand alias for `stcli`, so `st wsl fix` is equivalent
+to `stcli wsl fix`.
+
 Blank `stcli` command prints help.
