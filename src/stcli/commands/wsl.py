@@ -2,13 +2,9 @@ import ctypes
 import subprocess
 import sys
 
-import typer
+import click
 from rich.console import Console
 
-app = typer.Typer(
-    no_args_is_help=True,
-    help="Commands for managing the WSL environment.",
-)
 console = Console()
 
 
@@ -38,12 +34,17 @@ def _relaunch_elevated() -> int:
     return result.returncode
 
 
-@app.command("fix")
+@click.group(name="wsl", help="Commands for managing the WSL environment.")
+def wsl():
+    pass
+
+
+@wsl.command("fix")
 def wsl_fix():
     """Restart the WSL vmcompute service (Windows only)."""
     if sys.platform != "win32":
         console.print("[yellow]wsl fix must be run from Windows, not from inside WSL.[/yellow]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
     console.print("[cyan]Restarting vmcompute service...[/cyan]")
 
@@ -65,4 +66,4 @@ def wsl_fix():
     else:
         msg = f": {stderr}" if stderr else ""
         console.print(f"[red]Failed to restart vmcompute{msg}[/red]")
-        raise typer.Exit(returncode)
+        raise SystemExit(returncode)
