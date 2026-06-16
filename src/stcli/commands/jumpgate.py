@@ -75,6 +75,20 @@ def _to_windows_path(path: str) -> str:
     return path
 
 
+def _resolve_input(path: str) -> str:
+    """Resolve a relative path (e.g. ``..\\foo``) against the current directory.
+
+    Paths that are already absolute for either platform (``C:\\...``, a UNC
+    ``\\\\...`` path, or a POSIX ``/...`` path) are left untouched so the
+    Win<->WSL translation can handle them.
+    """
+    if _looks_like_windows_path(path) or path.startswith(("/", "\\\\")):
+        return path
+    if os.path.isabs(path):
+        return path
+    return str(Path(path).resolve())
+
+
 # --------------------------------------------------------------------------- #
 # Environment / profile targets
 # --------------------------------------------------------------------------- #
@@ -350,6 +364,8 @@ def add_cmd(name: str, path: str | None) -> None:
 
     if path is None:
         path = os.getcwd()
+    else:
+        path = _resolve_input(path)
 
     if not _NAME_RE.match(name):
         raise click.UsageError(
