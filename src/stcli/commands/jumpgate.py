@@ -335,15 +335,21 @@ def jumpgate() -> None:
 
 @jumpgate.command("add")
 @click.argument("name")
-@click.argument("path")
-def add_cmd(name: str, path: str) -> None:
+@click.argument("path", required=False)
+def add_cmd(name: str, path: str | None) -> None:
     """Add or update a jumpgate NAME that warps to PATH.
 
+    If PATH is omitted, the current directory is used.
+
     \b
-    Example:
+    Examples:
       st jg add repos "C:\\Users\\Blake\\source\\repos"
+      st jg add here          # drops a jumpgate at the current directory
     """
     kind, profile, reload_hint = _target()
+
+    if path is None:
+        path = os.getcwd()
 
     if not _NAME_RE.match(name):
         raise click.UsageError(
