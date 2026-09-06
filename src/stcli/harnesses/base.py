@@ -195,9 +195,11 @@ Reply with the command only, following these rules exactly:
 - No markdown, no code fences, no backticks.
 - No leading shell prompt characters such as $, > or PS>.
 - One command per line; when several steps are needed, list them in order.
-- Use <angle-bracket placeholders> for values only the user can supply.
+- Never ask for a value you were not given. Put a <placeholder> in the command
+  and let the user fill it in.
 - Do not read, write or change any files while answering.
-- If no command can answer this, reply with a single line starting with "# "."""
+- Only when the request is not about a command at all, reply with one line
+  starting with "# "."""
 
 EXPLAIN_INSTRUCTIONS = """\
 You are a terminal copilot answering someone who is reading a terminal.

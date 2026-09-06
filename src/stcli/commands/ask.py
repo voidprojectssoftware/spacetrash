@@ -8,6 +8,7 @@ is only the terminal surface; which agent answers, and how, lives behind the
 
 from __future__ import annotations
 
+import base64
 import os
 import shlex
 import shutil
@@ -129,35 +130,85 @@ def _apply_settings(entry: Installed, overrides: Settings) -> Installed:
 # --------------------------------------------------------------------------- #
 # Doing something with the answer
 # --------------------------------------------------------------------------- #
-def _clipboard_argv() -> list[str] | None:
-    if sys.platform == "win32":
-        exe = shutil.which("clip")
-        return [exe] if exe else None
-    if sys.platform == "darwin":
-        exe = shutil.which("pbcopy")
-        return [exe] if exe else None
-    candidates = (
-        ["wl-copy"],
-        ["xclip", "-selection", "clipboard"],
-        ["xsel", "-ib"],
-        ["clip.exe"],  # WSL, falls through to the Windows clipboard
+def echo_answer(text: str) -> None:
+    """Print the answer, whatever characters it turns out to contain.
+
+    Agents reply in UTF-8, but a redirected stdout on Windows defaults to the
+    ANSI code page, which cannot encode most of it.
+    """
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError, OSError):
+        pass
+    click.echo(text)
+
+
+def _powershell_copy(text: str) -> list[str] | None:
+    """Set the Windows clipboard through PowerShell, encoding and all.
+
+    The text travels as base64 in the command itself, so nothing depends on
+    the console code page. Preferred over `clip`, which needs UTF-16LE with a
+    byte order mark and then leaves that mark in what you paste.
+    """
+    exe = (
+        shutil.which("pwsh")
+        or shutil.which("powershell")
+        or shutil.which("powershell.exe")  # reachable from WSL
     )
-    for candidate in candidates:
+    if not exe:
+        return None
+    payload = base64.b64encode(text.encode("utf-8")).decode("ascii")
+    return [
+        exe, "-NoProfile", "-Command",
+        f"Set-Clipboard -Value ([Text.Encoding]::UTF8.GetString("
+        f"[Convert]::FromBase64String('{payload}')))",
+    ]
+
+
+def _clipboard_attempts(text: str) -> list[tuple[list[str], bytes]]:
+    """Every way to reach a clipboard from here, best first."""
+    utf8 = text.encode("utf-8", "replace")
+    attempts: list[tuple[list[str], bytes]] = []
+
+    def add(candidate: list[str], payload: bytes) -> None:
         exe = shutil.which(candidate[0])
         if exe:
-            return [exe] + candidate[1:]
-    return None
+            attempts.append(([exe] + candidate[1:], payload))
+
+    powershell = _powershell_copy(text)
+
+    if sys.platform == "win32":
+        if powershell:
+            attempts.append((powershell, b""))
+        add(["clip"], b"\xff\xfe" + text.encode("utf-16-le", "replace"))
+        return attempts
+
+    if sys.platform == "darwin":
+        add(["pbcopy"], utf8)
+        return attempts
+
+    add(["wl-copy"], utf8)
+    add(["xclip", "-selection", "clipboard"], utf8)
+    add(["xsel", "-ib"], utf8)
+    if powershell:  # WSL, reaching the Windows clipboard
+        attempts.append((powershell, b""))
+    return attempts
 
 
 def copy_to_clipboard(text: str) -> bool:
-    argv = _clipboard_argv()
-    if not argv:
-        return False
-    try:
-        subprocess.run(argv, input=text, text=True, check=True)
-    except (OSError, subprocess.CalledProcessError):
-        return False
-    return True
+    for argv, payload in _clipboard_attempts(text):
+        try:
+            subprocess.run(
+                argv,
+                input=payload,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return True
+        except (OSError, subprocess.CalledProcessError):
+            continue
+    return False
 
 
 def _shell_argv(command: str) -> list[str]:
@@ -191,7 +242,7 @@ def _maybe_run(answer: str) -> None:
 def _show_dry_run(harness: Harness, location: Location, request: AskRequest) -> None:
     argv = harness.argv(location, harness.build_prompt(request))
     err.print(f"[cyan]{harness.label}[/cyan] [dim]{location.describe()}[/dim]")
-    click.echo(" ".join(shlex.quote(part) for part in argv))
+    echo_answer(" ".join(shlex.quote(part) for part in argv))
 
 
 # --------------------------------------------------------------------------- #
@@ -298,7 +349,7 @@ def ask(
             message += f":\n{detail}"
         raise click.ClickException(message)
 
-    click.echo(text_out)
+    echo_answer(text_out)
     err.print(f"[dim]{entry.harness.label} - {answer.elapsed:.1f}s[/dim]")
 
     if answer.returncode != 0:
