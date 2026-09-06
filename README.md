@@ -36,10 +36,9 @@ st "give me the command to set ubuntu as my default distribution for wsl"
 Anything `stcli` does not recognise as a command is treated as a question, so
 `st "..."` and `st ask "..."` are the same thing.
 
-stcli looks for an agent harness already installed on the machine and drives it
-in one-shot mode: Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, Cursor
-Agent, Amazon Q, opencode, Goose, Crush, or `llm`. On Windows, if none is on the
-native PATH, it looks inside the default WSL distro too.
+stcli drives an agent CLI already installed on the machine in one-shot mode.
+**Claude Code is the harness we ship today.** On Windows, if `claude` is not on
+the native PATH, stcli looks inside the default WSL distro too.
 
 The answer goes to stdout on its own and everything else goes to stderr, so it
 pipes and copies cleanly:
@@ -50,22 +49,40 @@ st "flush the dns cache" | clip
 
 ```powershell
 st ask --list                          # what harnesses are installed
-st ask --set-default claude            # pin one (or set STCLI_HARNESS)
-st ask -H gemini "resize a qcow2 image"
 st ask -c "undo my last commit but keep the changes"   # also copy it
 st ask -r "show the biggest files here"                # run it, after confirming
 st ask -e "what does chmod 755 mean"                   # allow a short explanation
 st ask --dry-run "..."                 # show the harness command stcli would run
+st ask --set-default claude            # pin one (or set STCLI_HARNESS)
+st ask -H claude "resize a qcow2 image"                # pick one for one question
 ```
 
-Preferences live in `config.json` under the stcli app dir
-(`%APPDATA%\stcli` on Windows). A `commands` entry overrides how a harness is
-invoked, for the day one of these CLIs changes its flags:
+#### Harnesses
+
+Nothing in stcli talks to an agent CLI directly. Each one is a `Harness` in
+`src/stcli/harnesses/`, and `ask` only ever calls `harness.ask(request)`, so
+which agent answers and what flags it takes stay in one place. A harness owns
+four decisions: where it is installed, how to phrase the prompt, the argv that
+answers it in one shot, and how to read the reply.
+
+To add one: drop a module in that package, subclass `CliHarness` (a single argv
+template with a `{prompt}` token) or `Harness` (anything more involved, as
+Claude Code does to pass its system prompt separately), decorate it with
+`@register`, and import it in `harnesses/__init__.py`. Nothing outside the
+package changes.
+
+You can also point stcli at an agent it does not ship support for without
+touching the code. Preferences live in `config.json` under the stcli app dir
+(`%APPDATA%\stcli` on Windows). An entry under `commands` defines a new harness,
+or overrides how a shipped one is invoked for the day its flags change:
 
 ```json
 {
   "harness": "claude",
-  "commands": { "claude": ["claude", "-p", "{prompt}"] }
+  "commands": {
+    "claude": ["claude", "--print", "{prompt}"],
+    "some-other-agent": ["some-other-agent", "run", "{prompt}"]
+  }
 }
 ```
 
