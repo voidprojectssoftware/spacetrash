@@ -4,8 +4,15 @@ from __future__ import annotations
 
 import os
 import shlex
+from collections.abc import Callable
 
-from stcli.harnesses.base import ConfiguredHarness, Harness, Installed
+from stcli.harnesses.base import (
+    GENERIC_SETTINGS,
+    ConfiguredHarness,
+    Harness,
+    Installed,
+    Settings,
+)
 
 ENV_HARNESS = "STCLI_HARNESS"
 
@@ -46,23 +53,45 @@ def _templates(config: dict) -> dict[str, tuple[str, ...]]:
     return templates
 
 
+def _settings_for(config: dict) -> Callable[[str], Settings]:
+    """Resolve a harness's settings: its own block on top of the generic ones."""
+    generic = Settings.from_dict({k: v for k, v in config.items() if k in GENERIC_SETTINGS})
+    blocks = config.get("harnesses")
+    blocks = blocks if isinstance(blocks, dict) else {}
+
+    def resolve(name: str) -> Settings:
+        block = blocks.get(name)
+        return generic.merge(Settings.from_dict(block if isinstance(block, dict) else {}))
+
+    return resolve
+
+
+def unknown_options(harness: Harness) -> list[str]:
+    """Settings this harness was handed but does not declare. Likely typos."""
+    return sorted(set(harness.settings.options) - harness.option_names())
+
+
 def known(config: dict | None = None) -> list[Harness]:
     """Every harness stcli could use here, preferred one first."""
     config = config or {}
     templates = _templates(config)
+    settings_for = _settings_for(config)
 
     harnesses: list[Harness] = []
     for name in registered_names():
         harness_cls = _REGISTRY[name]
         template = templates.get(name)
+        settings = settings_for(name)
         if template:
-            harnesses.append(ConfiguredHarness(name, template, label=harness_cls.label))
+            harnesses.append(
+                ConfiguredHarness(name, template, label=harness_cls.label, settings=settings)
+            )
         else:
-            harnesses.append(harness_cls())
+            harnesses.append(harness_cls(settings))
 
     for name, template in templates.items():
         if name not in _REGISTRY:
-            harnesses.append(ConfiguredHarness(name, template))
+            harnesses.append(ConfiguredHarness(name, template, settings=settings_for(name)))
 
     preferred = preferred_name(config)
     if preferred:

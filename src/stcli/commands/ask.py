@@ -19,7 +19,14 @@ from rich.console import Console
 
 from stcli import config as config_store
 from stcli import harnesses
-from stcli.harnesses import AskRequest, Harness, HarnessError, Installed, Location
+from stcli.harnesses import (
+    AskRequest,
+    Harness,
+    HarnessError,
+    Installed,
+    Location,
+    Settings,
+)
 
 # Chrome goes to stderr so stdout stays a clean, pipeable answer.
 err = Console(stderr=True)
@@ -74,16 +81,47 @@ def _print_list(config: dict) -> None:
 
     preferred = harnesses.preferred_name(config)
     err.print("[cyan]Agent harnesses detected:[/cyan]")
-    width = max(len(entry.harness.name) for entry in found)
     for index, entry in enumerate(found):
+        harness = entry.harness
         tag = " [green](default)[/green]" if index == 0 else ""
-        if entry.harness.name == preferred:
+        if harness.name == preferred:
             tag += " [dim](preferred)[/dim]"
+        err.print(f"  [green]{harness.name}[/green]  {harness.label}{tag}")
+        err.print(f"      [dim]{entry.location.describe()}[/dim]")
         err.print(
-            f"  [green]{entry.harness.name.ljust(width)}[/green]  "
-            f"{entry.harness.label} [dim]{entry.location.describe()}[/dim]{tag}"
+            f"      [dim]model: {harness.model or 'harness default'}"
+            f" | timeout: {harness.timeout}s[/dim]"
         )
-    err.print(f"[dim]Set a default with: st ask --set-default {found[0].harness.name}[/dim]")
+        for option in harness.options:
+            value = harness.settings.option(option.name)
+            shown = f"= {value}" if value is not None else "unset"
+            err.print(f"      [dim]{option.name} {shown}  ({option.help})[/dim]")
+
+    err.print(
+        "[dim]Settings live in "
+        f"{config_store.config_path()} under 'harnesses'.[/dim]"
+    )
+
+
+def _cli_settings(model: str | None, options: tuple[str, ...], timeout: int | None) -> Settings:
+    """Turn the per-invocation flags into a settings layer."""
+    parsed: dict = {}
+    for item in options:
+        key, sep, value = item.partition("=")
+        if not sep:
+            raise click.UsageError(f"--option takes key=value, got '{item}'.")
+        parsed[key.strip()] = value.strip()
+    return Settings(model=model or "", timeout=timeout, options=parsed)
+
+
+def _apply_settings(entry: Installed, overrides: Settings) -> Installed:
+    """Layer the flags over the config, and flag any option nobody knows."""
+    harness = entry.harness.with_settings(entry.harness.settings.merge(overrides))
+    for name in harnesses.unknown_options(harness):
+        err.print(
+            f"[yellow]{harness.label} has no option '{name}'; ignoring it.[/yellow]"
+        )
+    return Installed(harness, entry.location)
 
 
 # --------------------------------------------------------------------------- #
@@ -161,8 +199,12 @@ def _show_dry_run(harness: Harness, location: Location, request: AskRequest) -> 
 @click.argument("question", nargs=-1)
 @click.option("-H", "--harness", "harness_name", metavar="NAME",
               help="Use a specific harness instead of the default.")
+@click.option("-m", "--model", metavar="NAME",
+              help="Model for this question, in the harness's own naming.")
+@click.option("-o", "--option", "options", metavar="KEY=VALUE", multiple=True,
+              help="Set one of the harness's own options. Repeatable.")
 @click.option("-l", "--list", "list_only", is_flag=True,
-              help="List the agent harnesses installed on this system.")
+              help="List the agent harnesses installed, with their settings.")
 @click.option("-e", "--explain", is_flag=True,
               help="Allow a short explanation instead of a bare command.")
 @click.option("-c", "--copy", "copy_flag", is_flag=True,
@@ -170,8 +212,8 @@ def _show_dry_run(harness: Harness, location: Location, request: AskRequest) -> 
 @click.option("-r", "--run", "run_flag", is_flag=True,
               help="Run the returned command after confirming.")
 @click.option("--raw", is_flag=True, help="Print the harness output verbatim.")
-@click.option("--timeout", type=int, default=180, show_default=True, metavar="SECONDS",
-              help="Give up when the harness takes longer than this.")
+@click.option("--timeout", type=int, default=None, metavar="SECONDS",
+              help="Give up when the harness takes longer than this.  [default: 180]")
 @click.option("--set-default", "set_default", metavar="NAME",
               help="Remember NAME as the harness to use, then exit.")
 @click.option("--dry-run", is_flag=True,
@@ -179,12 +221,14 @@ def _show_dry_run(harness: Harness, location: Location, request: AskRequest) -> 
 def ask(
     question: tuple[str, ...],
     harness_name: str | None,
+    model: str | None,
+    options: tuple[str, ...],
     list_only: bool,
     explain: bool,
     copy_flag: bool,
     run_flag: bool,
     raw: bool,
-    timeout: int,
+    timeout: int | None,
     set_default: str | None,
     dry_run: bool,
 ) -> None:
@@ -202,6 +246,7 @@ def ask(
       st "set ubuntu as my default wsl distro"
       st ask "undo my last git commit but keep the changes" --copy
       st ask -e "what does chmod 755 mean"
+      st ask -m opus -o effort=high "why is my docker build cache missing"
       st ask --list
     """
     config = config_store.load()
@@ -227,7 +272,7 @@ def ask(
         click.echo(click.get_current_context().get_help())
         return
 
-    entry = _pick(config, harness_name)
+    entry = _apply_settings(_pick(config, harness_name), _cli_settings(model, options, timeout))
     request = AskRequest.build(text, explain=explain)
 
     if dry_run:
@@ -237,9 +282,9 @@ def ask(
     try:
         if err.is_terminal:
             with err.status(f"[dim]asking {entry.harness.label}...[/dim]", spinner="dots"):
-                answer = entry.harness.ask(request, timeout=timeout, location=entry.location)
+                answer = entry.harness.ask(request, location=entry.location)
         else:
-            answer = entry.harness.ask(request, timeout=timeout, location=entry.location)
+            answer = entry.harness.ask(request, location=entry.location)
     except HarnessError as exc:
         raise click.ClickException(f"{entry.harness.label}: {exc}")
 

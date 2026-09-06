@@ -24,10 +24,12 @@ from stcli.harnesses.base import (
     ConfiguredHarness,
     Harness,
     HarnessError,
+    HarnessOption,
     HarnessUnavailable,
     Installed,
     Location,
     Prompt,
+    Settings,
     clean_output,
     describe_environment,
 )
@@ -39,6 +41,7 @@ from stcli.harnesses.registry import (
     preferred_name,
     register,
     registered_names,
+    unknown_options,
 )
 
 # Importing a harness module is what registers it.
@@ -52,10 +55,12 @@ __all__ = [
     "ENV_HARNESS",
     "Harness",
     "HarnessError",
+    "HarnessOption",
     "HarnessUnavailable",
     "Installed",
     "Location",
     "Prompt",
+    "Settings",
     "clean_output",
     "describe_environment",
     "get",
@@ -64,4 +69,5 @@ __all__ = [
     "preferred_name",
     "register",
     "registered_names",
+    "unknown_options",
 ]

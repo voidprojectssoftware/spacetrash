@@ -16,6 +16,7 @@ implementation and the package docstring for how to add another.
 
 from __future__ import annotations
 
+import copy
 import os
 import platform
 import re
@@ -26,6 +27,7 @@ import sys
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 
 
 class HarnessError(RuntimeError):
@@ -114,6 +116,66 @@ class Installed:
 
     harness: Harness
     location: Location
+
+
+DEFAULT_TIMEOUT = 180
+
+# Settings every harness understands. Anything else in a harness's config
+# block is one of its own options.
+GENERIC_SETTINGS = frozenset({"model", "timeout", "args"})
+
+
+@dataclass(frozen=True)
+class HarnessOption:
+    """A knob only one harness has, declared so stcli can list and check it."""
+
+    name: str
+    help: str
+
+
+@dataclass(frozen=True)
+class Settings:
+    """How to run a harness.
+
+    `model` and `timeout` mean the same thing whichever agent answers, so the
+    core owns them. `options` and `args` are the harness's own business: the
+    core carries them and never reads them.
+    """
+
+    model: str = ""
+    timeout: int | None = None
+    args: tuple[str, ...] = ()
+    options: dict = dataclass_field(default_factory=dict)
+
+    def option(self, name: str, default=None):
+        return self.options.get(name, default)
+
+    def merge(self, other: Settings) -> Settings:
+        """Layer ``other`` on top of this, where it says anything at all."""
+        return Settings(
+            model=other.model or self.model,
+            timeout=other.timeout if other.timeout is not None else self.timeout,
+            args=other.args or self.args,
+            options={**self.options, **other.options},
+        )
+
+    @classmethod
+    def from_dict(cls, data: dict) -> Settings:
+        """Read a config block: known keys are generic, the rest are options."""
+        if not isinstance(data, dict):
+            return cls()
+
+        timeout = data.get("timeout")
+        args = data.get("args") or ()
+        if isinstance(args, str):
+            args = shlex.split(args)
+
+        return cls(
+            model=str(data.get("model") or ""),
+            timeout=int(timeout) if isinstance(timeout, (int, float, str)) and str(timeout).isdigit() else None,
+            args=tuple(str(part) for part in args),
+            options={k: v for k, v in data.items() if k not in GENERIC_SETTINGS},
+        )
 
 
 COMMAND_INSTRUCTIONS = """\
@@ -245,6 +307,33 @@ class Harness(ABC):
     # Lines this agent prints around its answer, e.g. session banners.
     noise_patterns: tuple[re.Pattern[str], ...] = ()
 
+    # How this agent spells "use this model", and what it uses when nobody says.
+    model_flag: str = ""
+    default_model: str = ""
+
+    # Knobs only this agent has. Declared so stcli can list them and warn
+    # about a misspelt one, never so it can interpret them.
+    options: tuple[HarnessOption, ...] = ()
+
+    def __init__(self, settings: Settings | None = None) -> None:
+        self.settings = settings or Settings()
+
+    def with_settings(self, settings: Settings) -> Harness:
+        clone = copy.copy(self)
+        clone.settings = settings
+        return clone
+
+    @property
+    def model(self) -> str:
+        return self.settings.model or self.default_model
+
+    @property
+    def timeout(self) -> int:
+        return self.settings.timeout or DEFAULT_TIMEOUT
+
+    def option_names(self) -> set[str]:
+        return {option.name for option in self.options}
+
     # ---- discovery ------------------------------------------------------- #
     def locate(self, allow_wsl: bool = True) -> Location | None:
         """Find the executable, on PATH first and inside WSL as a fallback."""
@@ -266,6 +355,25 @@ class Harness(ABC):
         )
 
     # ---- invocation ------------------------------------------------------ #
+    def model_args(self) -> list[str]:
+        """The model setting in this agent's own spelling."""
+        if not self.model or not self.model_flag:
+            return []
+        return [self.model_flag, self.model]
+
+    def option_args(self) -> list[str]:
+        """This agent's own options in argv form. Nothing, unless it says so."""
+        return []
+
+    def tuning_args(self) -> list[str]:
+        """Everything the settings add to a call: generic first, then its own.
+
+        A harness drops this into its `command`. Anything in `args` is passed
+        through untouched, so it must not end in a flag that swallows what
+        comes after it.
+        """
+        return [*self.model_args(), *self.option_args(), *self.settings.args]
+
     @abstractmethod
     def command(self, location: Location, prompt: Prompt) -> list[str]:
         """The argv that makes this agent answer ``prompt`` and exit."""
@@ -283,7 +391,7 @@ class Harness(ABC):
     def ask(
         self,
         request: AskRequest,
-        timeout: int = 180,
+        timeout: int | None = None,
         location: Location | None = None,
     ) -> Answer:
         location = location or self.locate()
@@ -292,7 +400,7 @@ class Harness(ABC):
 
         argv = self.argv(location, self.build_prompt(request))
         started = time.monotonic()
-        stdout, stderr, returncode = run_command(argv, timeout)
+        stdout, stderr, returncode = run_command(argv, timeout or self.timeout)
         elapsed = time.monotonic() - started
 
         return Answer(
@@ -308,32 +416,64 @@ class CliHarness(Harness):
     """A harness whose whole integration is one argv template.
 
     Most agent CLIs need nothing more than this: give a `template` containing
-    the token ``{prompt}`` and the base class does the rest.
+    the token ``{prompt}`` and the base class does the rest. A second token,
+    ``{args}``, says where the settings belong; without it they go straight
+    after the executable.
     """
 
     template: tuple[str, ...] = ()
 
-    def __init__(self, template: tuple[str, ...] | None = None) -> None:
+    def __init__(
+        self,
+        template: tuple[str, ...] | None = None,
+        settings: Settings | None = None,
+    ) -> None:
+        super().__init__(settings)
         self._template = tuple(template) if template else self.template
 
     def command(self, location: Location, prompt: Prompt) -> list[str]:
-        parts = [part.replace("{prompt}", prompt.combined) for part in self._template]
-        if parts:
-            parts[0] = location.executable
-        return parts
+        tuning = self.tuning_args()
+
+        parts: list[str] = []
+        for part in self._template:
+            if part == "{args}":
+                parts.extend(tuning)
+                tuning = []
+                continue
+            parts.append(part.replace("{prompt}", prompt.combined))
+
+        if not parts:
+            return parts
+        parts[0] = location.executable
+        return [parts[0], *tuning, *parts[1:]]
 
 
 class ConfiguredHarness(CliHarness):
     """A harness declared in the user's config file rather than in code.
 
     This is the escape hatch for the day an agent changes its flags, and the
-    way to drive an agent stcli does not ship support for yet.
+    way to drive an agent stcli does not ship support for yet. It takes its
+    model flag from settings, since only the user knows how their agent
+    spells one.
     """
 
     install_hint = "declared in your stcli config.json"
+    options = (
+        HarnessOption("model_flag", "The flag this agent takes its model on, e.g. --model"),
+    )
 
-    def __init__(self, name: str, template: tuple[str, ...], label: str | None = None) -> None:
-        super().__init__(template)
+    def __init__(
+        self,
+        name: str,
+        template: tuple[str, ...],
+        label: str | None = None,
+        settings: Settings | None = None,
+    ) -> None:
+        super().__init__(template, settings)
         self.name = name
         self.label = label or name
         self.executable = self._template[0] if self._template else name
+
+    @property
+    def model_flag(self) -> str:
+        return str(self.settings.option("model_flag") or "")
