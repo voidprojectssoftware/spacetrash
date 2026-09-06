@@ -24,6 +24,51 @@ to `stcli wsl fix`.
 
 Blank `stcli` command prints help.
 
+### Ask
+
+Type a question and get the command back, nothing else:
+
+```powershell
+st "give me the command to set ubuntu as my default distribution for wsl"
+# wsl --set-default Ubuntu
+```
+
+Anything `stcli` does not recognise as a command is treated as a question, so
+`st "..."` and `st ask "..."` are the same thing.
+
+stcli looks for an agent harness already installed on the machine and drives it
+in one-shot mode: Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, Cursor
+Agent, Amazon Q, opencode, Goose, Crush, or `llm`. On Windows, if none is on the
+native PATH, it looks inside the default WSL distro too.
+
+The answer goes to stdout on its own and everything else goes to stderr, so it
+pipes and copies cleanly:
+
+```powershell
+st "flush the dns cache" | clip
+```
+
+```powershell
+st ask --list                          # what harnesses are installed
+st ask --set-default claude            # pin one (or set STCLI_HARNESS)
+st ask -H gemini "resize a qcow2 image"
+st ask -c "undo my last commit but keep the changes"   # also copy it
+st ask -r "show the biggest files here"                # run it, after confirming
+st ask -e "what does chmod 755 mean"                   # allow a short explanation
+st ask --dry-run "..."                 # show the harness command stcli would run
+```
+
+Preferences live in `config.json` under the stcli app dir
+(`%APPDATA%\stcli` on Windows). A `commands` entry overrides how a harness is
+invoked, for the day one of these CLIs changes its flags:
+
+```json
+{
+  "harness": "claude",
+  "commands": { "claude": ["claude", "-p", "{prompt}"] }
+}
+```
+
 ### Jumpgates
 
 A jumpgate is a named warp point to a directory. Place one, then warp to that
