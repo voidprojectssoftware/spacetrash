@@ -84,11 +84,14 @@ Windows). Two kinds, kept apart on purpose:
 Order of precedence: a `-m` or `-o` flag, then the harness block, then the
 top-level generic setting, then the harness's own default.
 
-Claude Code answers on **haiku** unless told otherwise, since looking up a
-command is a small question. Its options are `effort` (`low` through `max`) and
-`fast`. Note that fast mode has no flag of its own: stcli asks for it through
-Claude's settings, and Claude only grants it on the models it allows it for,
-which does not include haiku.
+Claude Code answers on **haiku** at **low effort** unless told otherwise, since
+looking up a command is a lookup, not an investigation. Raise it per question
+with `st ask -o effort=high "..."`, or turn it off with `-o effort=` (or
+`"effort": null` in config).
+
+Its other option is `fast`. Fast mode has no flag of its own: stcli asks for it
+through Claude's settings, and Claude only grants it on the models it allows it
+for, which does not include haiku.
 
 #### Harnesses
 

@@ -30,20 +30,23 @@ class ClaudeCode(Harness):
     default_model = "haiku"
 
     options = (
-        HarnessOption("effort", "Reasoning effort: low, medium, high, xhigh, max"),
+        # Low effort by default: these are lookups, not investigations.
+        HarnessOption(
+            "effort", "Reasoning effort: low, medium, high, xhigh, max", default="low"
+        ),
         HarnessOption("fast", "Ask for fast mode. Claude only grants it on Opus models"),
     )
 
     def option_args(self) -> list[str]:
         args: list[str] = []
 
-        effort = self.settings.option("effort")
+        effort = self.option("effort")
         if effort:
             args += ["--effort", str(effort)]
 
         # Fast mode has no flag of its own: it is a setting Claude reads at
         # startup, and it only takes on the models Claude allows it for.
-        if _truthy(self.settings.option("fast")):
+        if _truthy(self.option("fast")):
             args += ["--settings", json.dumps({"fastMode": True})]
 
         return args

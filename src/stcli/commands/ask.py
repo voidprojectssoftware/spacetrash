@@ -93,8 +93,10 @@ def _print_list(config: dict) -> None:
             f" | timeout: {harness.timeout}s[/dim]"
         )
         for option in harness.options:
-            value = harness.settings.option(option.name)
-            shown = f"= {value}" if value is not None else "unset"
+            value = harness.option(option.name)
+            shown = f"= {value}" if value not in (None, "") else "unset"
+            if harness.option_is_default(option.name) and value not in (None, ""):
+                shown += " (default)"
             err.print(f"      [dim]{option.name} {shown}  ({option.help})[/dim]")
 
     err.print(

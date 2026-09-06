@@ -127,10 +127,16 @@ GENERIC_SETTINGS = frozenset({"model", "timeout", "args"})
 
 @dataclass(frozen=True)
 class HarnessOption:
-    """A knob only one harness has, declared so stcli can list and check it."""
+    """A knob only one harness has, declared so stcli can list and check it.
+
+    A `default` is what the harness asks for when nobody says otherwise. Set
+    the option to null in config, or to nothing on the command line, to turn a
+    defaulted option back off.
+    """
 
     name: str
     help: str
+    default: object = None
 
 
 @dataclass(frozen=True)
@@ -333,6 +339,22 @@ class Harness(ABC):
 
     def option_names(self) -> set[str]:
         return {option.name for option in self.options}
+
+    def option(self, name: str):
+        """The value in force for one of this harness's own options.
+
+        What the settings say wins, even when what they say is nothing: that
+        is how a defaulted option gets turned off.
+        """
+        if name in self.settings.options:
+            return self.settings.options[name]
+        for declared in self.options:
+            if declared.name == name:
+                return declared.default
+        return None
+
+    def option_is_default(self, name: str) -> bool:
+        return name not in self.settings.options
 
     # ---- discovery ------------------------------------------------------- #
     def locate(self, allow_wsl: bool = True) -> Location | None:
