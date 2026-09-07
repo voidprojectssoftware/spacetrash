@@ -29,6 +29,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 
+from stcli import cache
+
 
 class HarnessError(RuntimeError):
     """Something went wrong reaching or running an agent CLI."""
@@ -60,6 +62,9 @@ class AskRequest:
     question: str
     explain: bool = False
     environment: str = ""
+    # Carried for harnesses that want it. The default prompts leave it out:
+    # it rarely changes the command, and including it would stop an answer
+    # cached in one directory being reused in another.
     cwd: str = ""
 
     @classmethod
@@ -97,6 +102,7 @@ class Answer:
     error: str
     returncode: int
     elapsed: float
+    cached: bool = False
 
 
 @dataclass(frozen=True)
@@ -120,9 +126,13 @@ class Installed:
 
 DEFAULT_TIMEOUT = 180
 
+# How long a stored answer stays good. Commands change slowly, and a stale
+# one is always visibly marked and one flag away from being replaced.
+DEFAULT_CACHE_DAYS = 14
+
 # Settings every harness understands. Anything else in a harness's config
 # block is one of its own options.
-GENERIC_SETTINGS = frozenset({"model", "timeout", "args"})
+GENERIC_SETTINGS = frozenset({"model", "timeout", "args", "cache_days"})
 
 
 @dataclass(frozen=True)
@@ -150,6 +160,7 @@ class Settings:
 
     model: str = ""
     timeout: int | None = None
+    cache_days: int | None = None
     args: tuple[str, ...] = ()
     options: dict = dataclass_field(default_factory=dict)
 
@@ -161,6 +172,9 @@ class Settings:
         return Settings(
             model=other.model or self.model,
             timeout=other.timeout if other.timeout is not None else self.timeout,
+            cache_days=(
+                other.cache_days if other.cache_days is not None else self.cache_days
+            ),
             args=other.args or self.args,
             options={**self.options, **other.options},
         )
@@ -171,14 +185,20 @@ class Settings:
         if not isinstance(data, dict):
             return cls()
 
-        timeout = data.get("timeout")
         args = data.get("args") or ()
         if isinstance(args, str):
             args = shlex.split(args)
 
+        def whole(name: str) -> int | None:
+            value = data.get(name)
+            if isinstance(value, bool) or value is None:
+                return None
+            return int(value) if str(value).lstrip("-").isdigit() else None
+
         return cls(
             model=str(data.get("model") or ""),
-            timeout=int(timeout) if isinstance(timeout, (int, float, str)) and str(timeout).isdigit() else None,
+            timeout=whole("timeout"),
+            cache_days=whole("cache_days"),
             args=tuple(str(part) for part in args),
             options={k: v for k, v in data.items() if k not in GENERIC_SETTINGS},
         )
@@ -188,7 +208,6 @@ COMMAND_INSTRUCTIONS = """\
 You are a terminal copilot. The user wants a command they can run right now.
 
 Environment: {env}
-Working directory: {cwd}
 
 Reply with the command only, following these rules exactly:
 - No prose, no explanation, no preamble, no sign-off.
@@ -205,7 +224,6 @@ EXPLAIN_INSTRUCTIONS = """\
 You are a terminal copilot answering someone who is reading a terminal.
 
 Environment: {env}
-Working directory: {cwd}
 
 Rules:
 - Plain text only: no markdown, no code fences, no asterisks.
@@ -339,6 +357,12 @@ class Harness(ABC):
     def timeout(self) -> int:
         return self.settings.timeout or DEFAULT_TIMEOUT
 
+    @property
+    def cache_days(self) -> int:
+        if self.settings.cache_days is None:
+            return DEFAULT_CACHE_DAYS
+        return self.settings.cache_days
+
     def option_names(self) -> set[str]:
         return {option.name for option in self.options}
 
@@ -374,7 +398,7 @@ class Harness(ABC):
     def build_prompt(self, request: AskRequest) -> Prompt:
         instructions = EXPLAIN_INSTRUCTIONS if request.explain else COMMAND_INSTRUCTIONS
         return Prompt(
-            system=instructions.format(env=request.environment, cwd=request.cwd),
+            system=instructions.format(env=request.environment),
             question=request.question,
         )
 
@@ -412,23 +436,50 @@ class Harness(ABC):
         return clean_output(stdout, self.noise_patterns)
 
     # ---- the only entry point callers need ------------------------------- #
+    def cache_key(self, prompt: Prompt) -> str:
+        """Everything that could change the answer, as one key.
+
+        The question is normalised first, so asking the same thing with
+        different capitals, spacing or a trailing question mark still hits.
+        """
+        question = " ".join(prompt.question.lower().split()).rstrip("?!. ")
+        options = sorted(f"{k}={v}" for k, v in self.settings.options.items())
+        return cache.key_for(
+            [self.name, self.model, *options, *self.settings.args,
+             prompt.system, question]
+        )
+
     def ask(
         self,
         request: AskRequest,
         timeout: int | None = None,
         location: Location | None = None,
+        use_cache: bool = True,
     ) -> Answer:
         location = location or self.locate()
         if location is None:
             raise HarnessUnavailable(f"{self.label} is not installed.")
 
-        argv = self.argv(location, self.build_prompt(request))
+        prompt = self.build_prompt(request)
+        key = self.cache_key(prompt)
+
+        if use_cache:
+            stored = cache.load(key, self.cache_days)
+            if stored is not None:
+                return Answer(stored, stored, "", 0, 0.0, cached=True)
+
         started = time.monotonic()
-        stdout, stderr, returncode = run_command(argv, timeout or self.timeout)
+        stdout, stderr, returncode = run_command(
+            self.argv(location, prompt), timeout or self.timeout
+        )
         elapsed = time.monotonic() - started
+        text = self.parse(stdout, stderr, returncode)
+
+        if returncode == 0 and text.strip() and self.cache_days > 0:
+            cache.store(key, text, request.question)
 
         return Answer(
-            text=self.parse(stdout, stderr, returncode),
+            text=text,
             raw=stdout,
             error=stderr,
             returncode=returncode,

@@ -18,6 +18,7 @@ import sys
 import click
 from rich.console import Console
 
+from stcli import cache as answer_cache
 from stcli import config as config_store
 from stcli import harnesses
 from stcli.harnesses import (
@@ -91,7 +92,7 @@ def _print_list(config: dict) -> None:
         err.print(f"      [dim]{entry.location.describe()}[/dim]")
         err.print(
             f"      [dim]model: {harness.model or 'harness default'}"
-            f" | timeout: {harness.timeout}s[/dim]"
+            f" | timeout: {harness.timeout}s | cache: {harness.cache_days}d[/dim]"
         )
         for option in harness.options:
             value = harness.option(option.name)
@@ -264,6 +265,10 @@ def _show_dry_run(harness: Harness, location: Location, request: AskRequest) -> 
               help="Copy the answer to the clipboard.")
 @click.option("-r", "--run", "run_flag", is_flag=True,
               help="Run the returned command after confirming.")
+@click.option("--no-cache", "no_cache", is_flag=True,
+              help="Ask again instead of reusing a stored answer.")
+@click.option("--clear-cache", "clear_cache", is_flag=True,
+              help="Forget every stored answer, then exit.")
 @click.option("--raw", is_flag=True, help="Print the harness output verbatim.")
 @click.option("--timeout", type=int, default=None, metavar="SECONDS",
               help="Give up when the harness takes longer than this.  [default: 180]")
@@ -280,6 +285,8 @@ def ask(
     explain: bool,
     copy_flag: bool,
     run_flag: bool,
+    no_cache: bool,
+    clear_cache: bool,
     raw: bool,
     timeout: int | None,
     set_default: str | None,
@@ -303,6 +310,11 @@ def ask(
       st ask --list
     """
     config = config_store.load()
+
+    if clear_cache:
+        removed = answer_cache.clear()
+        err.print(f"[green]Forgot {removed} stored answer(s).[/green]")
+        return
 
     if set_default:
         if harnesses.get(set_default, config) is None:
@@ -332,12 +344,17 @@ def ask(
         _show_dry_run(entry.harness, entry.location, request)
         return
 
+    def run() -> harnesses.Answer:
+        return entry.harness.ask(
+            request, location=entry.location, use_cache=not no_cache
+        )
+
     try:
         if err.is_terminal:
             with err.status(f"[dim]asking {entry.harness.label}...[/dim]", spinner="dots"):
-                answer = entry.harness.ask(request, location=entry.location)
+                answer = run()
         else:
-            answer = entry.harness.ask(request, location=entry.location)
+            answer = run()
     except HarnessError as exc:
         raise click.ClickException(f"{entry.harness.label}: {exc}")
 
@@ -350,7 +367,10 @@ def ask(
         raise click.ClickException(message)
 
     echo_answer(text_out)
-    err.print(f"[dim]{entry.harness.label} - {answer.elapsed:.1f}s[/dim]")
+    if answer.cached:
+        err.print(f"[dim]{entry.harness.label} - remembered, --no-cache to ask again[/dim]")
+    else:
+        err.print(f"[dim]{entry.harness.label} - {answer.elapsed:.1f}s[/dim]")
 
     if answer.returncode != 0:
         err.print(f"[yellow]Harness exited with code {answer.returncode}.[/yellow]")

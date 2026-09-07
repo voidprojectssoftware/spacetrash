@@ -52,15 +52,21 @@ class ClaudeCode(Harness):
         return args
 
     def command(self, location: Location, prompt: Prompt) -> list[str]:
-        # --disallowed-tools takes a variable number of values, so it must be
+        # Two of these are here for speed. --strict-mcp-config with no config
+        # given starts no MCP servers, and --system-prompt replaces Claude
+        # Code's default prompt instead of appending to it, so none of the
+        # agent scaffolding is loaded to answer a one-line question.
+        #
+        # --disallowed-tools takes a variable number of values, so it has to be
         # followed by another flag rather than by the question itself.
         return [
             location.executable,
             "--print",
             "--output-format", "text",
             "--no-session-persistence",
+            "--strict-mcp-config",
             *self.tuning_args(),
             "--disallowed-tools", _DENIED_TOOLS,
-            "--append-system-prompt", prompt.system,
+            "--system-prompt", prompt.system,
             prompt.question,
         ]

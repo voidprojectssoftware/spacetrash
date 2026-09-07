@@ -56,7 +56,25 @@ st ask --dry-run "..."                 # show the harness command stcli would ru
 st ask --set-default claude            # pin one (or set STCLI_HARNESS)
 st ask -H claude "resize a qcow2 image"                # pick one for one question
 st ask -m opus -o effort=high "..."    # model and harness options, per question
+st ask --no-cache "..."                # ask again instead of reusing an answer
+st ask --clear-cache                   # forget every stored answer
 ```
+
+#### Speed
+
+An answer takes about five seconds, most of which is the agent starting up and
+thinking. Three things keep it down:
+
+- **Answers are remembered** for 14 days, so asking the same thing twice takes
+  about a fifth of a second. The question is matched loosely enough that
+  capitals, spacing and a trailing question mark do not cost you the hit, and a
+  reused answer says so instead of pretending it just arrived. `--no-cache`
+  asks again, `cache_days` in config changes the window, and `0` turns it off.
+- **The agent is started lean.** Claude Code runs with no MCP servers and with
+  its default system prompt replaced rather than appended to, so none of the
+  agent scaffolding is loaded to answer a one-line question. Worth about two
+  seconds.
+- **The small model at low effort**, which is the default described below.
 
 #### Settings
 
@@ -64,8 +82,8 @@ Settings live in `config.json` under the stcli app dir (`%APPDATA%\stcli` on
 Windows). Two kinds, kept apart on purpose:
 
 - **Generic**, because they mean the same thing whichever agent answers, so the
-  core owns them: `model`, `timeout`, and raw `args`. Set them at the top level
-  to apply everywhere, or inside a harness block for one agent.
+  core owns them: `model`, `timeout`, `cache_days`, and raw `args`. Set them at
+  the top level to apply everywhere, or inside a harness block for one agent.
 - **Harness options**, which only one agent has. The core carries them and never
   reads them. `st ask --list` prints the ones each harness declares, and stcli
   warns about a name nobody claims.
@@ -75,6 +93,7 @@ Windows). Two kinds, kept apart on purpose:
   "harness": "claude",
   "model": "haiku",
   "timeout": 180,
+  "cache_days": 14,
   "harnesses": {
     "claude": { "model": "haiku", "effort": "low" }
   }
