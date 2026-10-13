@@ -125,6 +125,59 @@ settings land, if you want them:
 }
 ```
 
+### Pull requests
+
+Work on a PR in its own git worktree, so several can be open at once and the
+main checkout is never touched. Needs the GitHub CLI (`gh`).
+
+```powershell
+st pr 812                       # same as: st pr open 812
+st pr open https://github.com/owner/repo/pull/812
+st pr list                      # worktrees that belong to a PR, with its state
+st pr path 812                  # cd (st pr path 812)
+st pr run 812 dotnet test       # run something in the PR's worktree
+st pr close 812 --remove        # run close hooks, then remove the worktree
+st pr clean                     # remove worktrees whose PR is merged or closed
+```
+
+`open` reuses whichever worktree already has the PR's branch checked out,
+wherever it is, and fast-forwards it when it is clean. Otherwise it creates
+`pr-<number>` under the repo's worktree directory (by default a sibling
+`<repo>.worktrees` folder). A PR from a fork gets a local branch named
+`pr/<number>`. Then it opens an editor (`code {path}` unless configured) and
+runs the repo's `open` hooks.
+
+`clean` never removes the main checkout, a locked worktree, or one with
+uncommitted changes, and keeps local branches unless you pass `--delete-branch`.
+
+Everything repo-specific lives under `pr` in `config.json`. Hooks and commands
+are shell strings (or argv lists, to skip the shell), run in the worktree, with
+`{path}`, `{number}`, `{branch}`, `{repo}` and `{url}` filled in:
+
+```json
+{
+  "pr": {
+    "editor": "code {path}",
+    "repos": {
+      "T3-Expo/t3finance": {
+        "path": "C:/Users/me/source/repos/t3finance",
+        "worktree_dir": ".claude/worktrees",
+        "hooks": {
+          "open": ["aspire start --isolated --non-interactive --apphost src/T3F.AppHost"],
+          "close": ["aspire stop --force --non-interactive --apphost src/T3F.AppHost"]
+        },
+        "commands": { "stop": "aspire stop --force --non-interactive --apphost src/T3F.AppHost" }
+      }
+    }
+  }
+}
+```
+
+`path` is only needed to use a PR URL from outside the clone. A relative
+`worktree_dir` is resolved against the repo. `st pr run 812 stop` runs a named
+command; anything that is not a name runs as given. Skip the hooks or the editor
+for one run with `--no-hooks` / `--no-editor`.
+
 ### Jumpgates
 
 A jumpgate is a named warp point to a directory. Place one, then warp to that

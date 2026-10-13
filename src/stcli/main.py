@@ -1,6 +1,6 @@
 import click
 
-from stcli.commands import ask, jumpgate, wsl
+from stcli.commands import ask, jumpgate, pr, wsl
 
 
 def _looks_like_question(args: list[str]) -> bool:
@@ -87,6 +87,7 @@ app.add_command(wsl.wsl)
 app.add_command(jumpgate.jumpgate)
 app.add_alias("jg", "jumpgate")
 app.add_command(ask.ask)
+app.add_command(pr.pr)
 
 
 if __name__ == "__main__":
