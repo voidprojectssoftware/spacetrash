@@ -416,9 +416,11 @@ def pr_open(target, repo_option, no_update, no_hooks, no_editor):
     pr_info = _fetch_pr(slug, _parse_number(target))
     console.print(f"[bold]#{pr_info.number}[/bold] {pr_info.title} [dim]({pr_info.state.lower()})[/dim]")
     path = _ensure_worktree(slug, repo, pr_info, update=not no_update)
+    # Hooks first: an editor that builds on open (C# Dev Kit) would race them.
+    hooks_ok = no_hooks or _run_hooks(slug, "open", pr_info, path)
     if not no_editor:
         _open_editor(path, pr_info, slug)
-    if not no_hooks and not _run_hooks(slug, "open", pr_info, path):
+    if not hooks_ok:
         raise SystemExit(1)
     click.echo(str(path))
 
